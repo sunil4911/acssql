@@ -72,6 +72,40 @@ Option Explicit
 '   PDF.SetStartX 3.5                       ' inches from the left margin
 '   PDF.PrintText "X_______________"
 ' SetStartXPt is the points-based equivalent of SetStartX.
+'
+' Letterhead background (a pre-designed graphic - e.g. a firm's logo/heading -
+' stamped behind the first page of every document, the way pre-printed letterhead
+' paper works). The graphic itself comes from a one-time text extraction of a
+' source PDF's drawing commands (see DOC\Extract_LH_Content.ps1), not the PDF
+' file directly, since VB6 has no built-in Flate/zlib decompressor:
+'   PDF.SetLetterhead "C:\ACSSQL\DOC\LH_Content.txt"
+'   PDF.SetLetterheadFooter "THE LAW FIRM OF ... IS A DEBT COLLECTOR ..."
+'   PDF.PrintText "Dear John,"
+'   ' ... rest of the letter ...
+'   PDF.SavePDF
+' Only the source PDF's page graphics are reproduced (no fonts/images), so this
+' only works for letterhead artwork that is pure vector paths - exactly what
+' DOC\LH.pdf (a "Print to PDF" vector letterhead) contains. ClearLetterhead turns
+' it back off for any later documents created with the same clsPDF instance.
+' NOTE: for a letterhead sidebar whose names/text need to change over time (e.g.
+' an attorney/staff roster), prefer PrintTextAt/DrawLine below plus a real data
+' source instead - see Letterhead_clsPDF.PrintFirmSidebar for a worked example
+' that pulls its roster from the employee table.
+
+' Absolute-position primitives (for content that runs independently of the
+' normal top-down PrintText flow - e.g. a sidebar column down the side of a
+' page while the main letter body flows down the left side). Unlike
+' PrintText/SetStartX, these do NOT move the normal text cursor and never
+' trigger a page break - they simply draw at the exact coordinates given,
+' measured in inches (or points, for the *Pt variants) from the TOP-LEFT
+' corner of the page (not from the margins):
+'   PDF.DrawLine 6.15, 0.6, 6.15, 10.2              ' a vertical rule
+'   PDF.PrintTextAt 6.35, 0.6, "Some Law Firm", pdfCenter, 1.65   ' centered in a 1.65in-wide box
+'   PDF.PrintTextAt 1, 1, "Just a label"             ' WidthIn omitted -> plain left-aligned
+' Align other than pdfLeft requires WidthIn/WidthPt (the box to align within);
+' it's ignored (treated as pdfLeft) if omitted/zero. Both draw onto whichever
+' page is "current" at the time of the call - call them before any NewPage if
+' they're meant to land on page 1 (the usual case for a letterhead sidebar).
 
 Public Enum PdfAlign
     pdfLeft = 0
@@ -113,6 +147,13 @@ Private m_TabStopCount As Integer
 Private m_PendingStartX As Double
 Private m_HasPendingStartX As Boolean
 
+Private m_LetterheadContent As String
+Private m_HasLetterhead As Boolean
+
+Private m_LetterheadFooterText As String
+Private m_LetterheadFooterY As Double   ' inches from top of page
+Private m_HasLetterheadFooter As Boolean
+
 Private m_WHelv(32 To 126) As Integer
 Private m_WHelvB(32 To 126) As Integer
 Private m_WTimes(32 To 126) As Integer
@@ -129,6 +170,8 @@ Private Sub Class_Initialize()
     m_FontUnderline = False
     m_TabStopCount = 0
     m_HasPendingStartX = False
+    m_HasLetterhead = False
+    m_HasLetterheadFooter = False
     LoadWidthTables
 End Sub
 
@@ -205,6 +248,89 @@ End Sub
 Public Sub SetStartXPt(ByVal XPt As Double)
     m_PendingStartX = XPt
     m_HasPendingStartX = True
+End Sub
+
+' Draws one line of text at an exact page position, independent of the normal
+' top-down PrintText cursor (see the "Absolute-position primitives" note near
+' the top of this file). XIn/YIn are inches from the page's top-left corner.
+' If WidthIn is given (>0), Align (pdfLeft/pdfCenter/pdfRight/pdfJustify) positions
+' the text within that box width, starting at XIn; otherwise the text is always
+' left-aligned starting at XIn regardless of Align. Supports the same inline
+' **bold**/*italic*/__underline__ markup as PrintText, using the current SetFont.
+Public Sub PrintTextAt(ByVal XIn As Double, ByVal YIn As Double, ByVal Text As String, Optional ByVal Align As PdfAlign = pdfLeft, Optional ByVal WidthIn As Double = 0)
+    PrintTextAtPt XIn * 72, YIn * 72, Text, Align, WidthIn * 72
+End Sub
+
+' Same as PrintTextAt, but values are in points (1/72 inch) rather than inches.
+Public Sub PrintTextAtPt(ByVal XPt As Double, ByVal YPt As Double, ByVal Text As String, Optional ByVal Align As PdfAlign = pdfLeft, Optional ByVal WidthPt As Double = 0)
+    Dim tokens() As PdfToken
+    Dim nTok As Integer
+
+    If Not m_Started Then
+        Err.Raise 5, "clsPDF.PrintTextAt", "CreatePDF must be called before PrintTextAt."
+    End If
+    If Len(Text) = 0 Then Exit Sub
+
+    TokenizeLine Text, tokens, nTok
+    If nTok = 0 Then Exit Sub
+
+    EmitLineAt tokens, nTok, XPt, m_PageHeight - YPt, Align, WidthPt
+End Sub
+
+' Draws a straight line at an exact page position, independent of the normal
+' PrintText cursor (see the "Absolute-position primitives" note near the top
+' of this file). Coordinates are inches from the page's top-left corner.
+Public Sub DrawLine(ByVal X1In As Double, ByVal Y1In As Double, ByVal X2In As Double, ByVal Y2In As Double, Optional ByVal WidthPt As Double = 1)
+    DrawLinePt X1In * 72, Y1In * 72, X2In * 72, Y2In * 72, WidthPt
+End Sub
+
+' Same as DrawLine, but coordinates are in points (1/72 inch) rather than inches.
+Public Sub DrawLinePt(ByVal X1Pt As Double, ByVal Y1Pt As Double, ByVal X2Pt As Double, ByVal Y2Pt As Double, Optional ByVal WidthPt As Double = 1)
+    If Not m_Started Then
+        Err.Raise 5, "clsPDF.DrawLine", "CreatePDF must be called before DrawLine."
+    End If
+    AppendRaw "q" & vbLf
+    AppendRaw Num(WidthPt) & " w" & vbLf
+    AppendRaw Num(X1Pt) & " " & Num(m_PageHeight - Y1Pt) & " m" & vbLf
+    AppendRaw Num(X2Pt) & " " & Num(m_PageHeight - Y2Pt) & " l" & vbLf
+    AppendRaw "S" & vbLf
+    AppendRaw "Q" & vbLf
+End Sub
+
+' Loads a pre-extracted letterhead graphic (raw PDF drawing commands, produced
+' once via DOC\Extract_LH_Content.ps1 from a source PDF such as DOC\LH.pdf) and
+' stamps it onto the first page of the next document(s) saved by this clsPDF
+' instance. See the "Letterhead background" note near the top of this file.
+Public Sub SetLetterhead(ByVal ContentFilePath As String)
+    Dim fnum As Integer
+    fnum = FreeFile
+    Open ContentFilePath For Input As #fnum
+    m_LetterheadContent = Input$(LOF(fnum), fnum)
+    Close #fnum
+    m_HasLetterhead = True
+End Sub
+
+' Turns off the letterhead set by SetLetterhead for any documents created with
+' this clsPDF instance from this point on.
+Public Sub ClearLetterhead()
+    m_HasLetterhead = False
+End Sub
+
+' Sets the bottom-of-page letterhead disclosure/footer text that is drawn as
+' real text (not vector artwork) on page 1 when SavePDF runs. YFromTopIn is
+' the vertical position of the first footer line, measured in inches from the
+' top of the page (default 10.35" places a two-line footer near the bottom).
+' Pass an empty string to suppress the footer without clearing the sidebar
+' graphic loaded by SetLetterhead.
+Public Sub SetLetterheadFooter(ByVal FooterText As String, Optional ByVal YFromTopIn As Double = 10.35)
+    m_LetterheadFooterText = FooterText
+    m_LetterheadFooterY = YFromTopIn
+    m_HasLetterheadFooter = (Len(FooterText) > 0)
+End Sub
+
+Public Sub ClearLetterheadFooter()
+    m_HasLetterheadFooter = False
+    m_LetterheadFooterText = ""
 End Sub
 
 Public Sub NewPage()
@@ -413,6 +539,9 @@ Public Sub SavePDF()
     Dim xrefStart As Long
     Dim xrefStr As String
     Dim kids As String
+    Dim letterheadObjNum As Integer
+    Dim lhStream As String
+    Dim contentsEntry As String
 
     If Not m_Started Then
         Err.Raise 5, "clsPDF.SavePDF", "CreatePDF must be called before SavePDF."
@@ -426,7 +555,15 @@ Public Sub SavePDF()
         nPages = m_PageCount
     End If
 
+    If m_HasLetterheadFooter And nPages >= 1 Then
+        m_Pages(0) = BuildLetterheadFooterContent() & m_Pages(0)
+    End If
+
     totalObjs = 14 + nPages * 2
+    If m_HasLetterhead Then
+        letterheadObjNum = totalObjs + 1
+        totalObjs = totalObjs + 1
+    End If
     ReDim offsets(1 To totalObjs)
 
     On Error Resume Next
@@ -465,14 +602,29 @@ Public Sub SavePDF()
     Next k
     resourcesDict = resourcesDict & ">> >>"
 
+    ' Letterhead object (if set): one shared stream, referenced from page 1's
+    ' /Contents only, wrapped in its own q/Q so it can't leak graphics state
+    ' (CTM, color, line width, ...) into that page's own content afterward.
+    If m_HasLetterhead Then
+        lhStream = "q" & vbLf & m_LetterheadContent & vbLf & "Q" & vbLf
+        offsets(letterheadObjNum) = Pos
+        WriteBytes fnum, Pos, letterheadObjNum & " 0 obj" & vbLf & "<< /Length " & Len(lhStream) & " >>" & vbLf & "stream" & vbLf & lhStream & "endstream" & vbLf & "endobj" & vbLf
+    End If
+
     ' Page + content-stream object pairs
     For I = 1 To nPages
         pageObjNum = 15 + (I - 1) * 2
         contObjNum = pageObjNum + 1
 
+        If m_HasLetterhead And I = 1 Then
+            contentsEntry = "[" & letterheadObjNum & " 0 R " & contObjNum & " 0 R]"
+        Else
+            contentsEntry = contObjNum & " 0 R"
+        End If
+
         offsets(pageObjNum) = Pos
         WriteBytes fnum, Pos, pageObjNum & " 0 obj" & vbLf & _
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " & Num(m_PageWidth) & " " & Num(m_PageHeight) & "] /Resources " & resourcesDict & " /Contents " & contObjNum & " 0 R >>" & vbLf & "endobj" & vbLf
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " & Num(m_PageWidth) & " " & Num(m_PageHeight) & "] /Resources " & resourcesDict & " /Contents " & contentsEntry & " >>" & vbLf & "endobj" & vbLf
 
         streamData = m_Pages(I - 1)
         offsets(contObjNum) = Pos
@@ -561,15 +713,86 @@ Private Sub EmitLine(ByRef tokens() As PdfToken, ByVal nCount As Integer, ByVal 
     m_CurY = m_CurY - LineHeight()
 End Sub
 
+' Like EmitLine, but draws at an explicit device-space Y (yDev, already flipped
+' to PDF's bottom-up coordinate system) instead of the running m_CurY cursor,
+' and never advances that cursor or triggers a page break - used by
+' PrintTextAt for content that runs independently of the normal text flow
+' (e.g. a letterhead sidebar). If availWidth is 0, Align is always treated as
+' pdfLeft (there's no box to align within).
+Private Sub EmitLineAt(ByRef tokens() As PdfToken, ByVal nCount As Integer, ByVal xStart0 As Double, ByVal yDev As Double, ByVal Align As PdfAlign, ByVal availWidth As Double)
+    Dim naturalWidth As Double
+    Dim spaceW As Double
+    Dim I As Integer
+    Dim xStart As Double
+    Dim tw As Double
+    Dim tokW() As Double
+    Dim tokX() As Double
+    Dim pen As Double
+    Dim effAlign As PdfAlign
+
+    effAlign = Align
+    If availWidth <= 0 Then effAlign = pdfLeft
+
+    spaceW = MeasureChar(" ", m_FontFamily, False) * m_FontSize / 1000
+
+    ReDim tokW(0 To nCount - 1)
+    naturalWidth = 0
+    For I = 0 To nCount - 1
+        tokW(I) = MeasureWord(tokens(I).sWord, m_FontFamily, tokens(I).bBold) * m_FontSize / 1000
+        naturalWidth = naturalWidth + tokW(I)
+    Next I
+    If nCount > 1 Then naturalWidth = naturalWidth + spaceW * (nCount - 1)
+
+    tw = 0
+    Select Case effAlign
+        Case pdfCenter
+            xStart = xStart0 + (availWidth - naturalWidth) / 2
+        Case pdfRight
+            xStart = xStart0 + (availWidth - naturalWidth)
+        Case pdfJustify
+            xStart = xStart0
+            If nCount > 1 Then tw = (availWidth - naturalWidth) / (nCount - 1)
+        Case Else ' pdfLeft
+            xStart = xStart0
+    End Select
+
+    ReDim tokX(0 To nCount - 1)
+    pen = xStart
+    For I = 0 To nCount - 1
+        tokX(I) = pen
+        pen = pen + tokW(I) + spaceW + tw
+    Next I
+
+    AppendRaw "BT" & vbLf
+    AppendRaw Num(tw) & " Tw" & vbLf
+    AppendRaw Num(xStart) & " " & Num(yDev) & " Td" & vbLf
+
+    For I = 0 To nCount - 1
+        SetFontIfNeeded tokens(I).bBold, tokens(I).bItalic
+        AppendRaw "(" & EscapePdfString(tokens(I).sWord) & ") Tj" & vbLf
+        If I < nCount - 1 Then
+            AppendRaw "( ) Tj" & vbLf
+        End If
+    Next I
+
+    AppendRaw "ET" & vbLf
+
+    EmitUnderlinesAt tokens, tokX, tokW, nCount, yDev
+End Sub
+
 ' Draws a solid bar beneath each run of consecutive underlined tokens (so
 ' "__two words__" gets one continuous underline, not two separate ones).
 Private Sub EmitUnderlines(ByRef tokens() As PdfToken, ByRef tokX() As Double, ByRef tokW() As Double, ByVal nCount As Integer)
+    EmitUnderlinesAt tokens, tokX, tokW, nCount, m_CurY
+End Sub
+
+Private Sub EmitUnderlinesAt(ByRef tokens() As PdfToken, ByRef tokX() As Double, ByRef tokW() As Double, ByVal nCount As Integer, ByVal yDev As Double)
     Dim I As Integer
     Dim runStart As Integer
     Dim uStart As Double, uEnd As Double
     Dim underlineY As Double, underlineH As Double
 
-    underlineY = m_CurY - m_FontSize * 0.08
+    underlineY = yDev - m_FontSize * 0.08
     underlineH = m_FontSize * 0.06
     If underlineH < 0.75 Then underlineH = 0.75
 
@@ -882,6 +1105,100 @@ Private Function EscapePdfString(ByVal S As String) As String
     r = Replace(r, "(", "\(")
     r = Replace(r, ")", "\)")
     EscapePdfString = r
+End Function
+
+Private Function BuildLetterheadFooterContent() As String
+    Dim savedContent As String
+    Dim savedFamily As String
+    Dim savedSize As Double
+    Dim savedBold As Boolean
+    Dim savedItalic As Boolean
+    Dim savedUnderline As Boolean
+    Dim savedFontKey As String
+    Dim tokens() As PdfToken
+    Dim nTok As Integer
+    Dim lineTok() As PdfToken
+    Dim lineCount As Integer
+    Dim I As Integer
+    Dim lineNum As Integer
+    Dim spaceW As Double
+    Dim wordW As Double
+    Dim curWidth As Double
+    Dim testWidth As Double
+    Dim xStart As Double
+    Dim availWidth As Double
+    Dim lineH As Double
+    Dim yDev As Double
+
+    savedContent = m_CurContent
+    savedFamily = m_FontFamily
+    savedSize = m_FontSize
+    savedBold = m_FontBold
+    savedItalic = m_FontItalic
+    savedUnderline = m_FontUnderline
+    savedFontKey = m_CurFontKey
+
+    m_CurContent = ""
+    m_FontFamily = "Times"
+    m_FontSize = 12
+    m_FontBold = True
+    m_FontItalic = False
+    m_FontUnderline = False
+    m_CurFontKey = ""
+
+    xStart = m_MarginLeft
+    availWidth = m_PageWidth - m_MarginLeft - m_MarginRight
+    lineH = LineHeight()
+
+    TokenizeLine m_LetterheadFooterText, tokens, nTok
+    If nTok = 0 Then
+        BuildLetterheadFooterContent = ""
+        GoTo RestoreState
+    End If
+
+    spaceW = MeasureChar(" ", m_FontFamily, False) * m_FontSize / 1000
+    ReDim lineTok(0 To nTok - 1)
+    lineCount = 0
+    curWidth = 0
+    lineNum = 0
+
+    For I = 0 To nTok - 1
+        wordW = MeasureWord(tokens(I).sWord, m_FontFamily, tokens(I).bBold) * m_FontSize / 1000
+        If lineCount = 0 Then
+            testWidth = wordW
+        Else
+            testWidth = curWidth + spaceW + wordW
+        End If
+
+        If testWidth > availWidth And lineCount > 0 Then
+            yDev = m_PageHeight - ((m_LetterheadFooterY * 72) + lineNum * lineH)
+            EmitLineAt lineTok, lineCount, xStart, yDev, pdfCenter, availWidth
+            lineCount = 0
+            curWidth = wordW
+            lineNum = lineNum + 1
+        Else
+            curWidth = testWidth
+        End If
+
+        lineTok(lineCount) = tokens(I)
+        lineCount = lineCount + 1
+    Next I
+
+    If lineCount > 0 Then
+        yDev = m_PageHeight - ((m_LetterheadFooterY * 72) + lineNum * lineH)
+        EmitLineAt lineTok, lineCount, xStart, yDev, pdfCenter, availWidth
+    End If
+
+    BuildLetterheadFooterContent = m_CurContent
+
+RestoreState:
+    m_CurContent = savedContent
+    m_FontFamily = savedFamily
+    m_FontSize = savedSize
+    m_FontBold = savedBold
+    m_FontItalic = savedItalic
+    m_FontUnderline = savedUnderline
+    m_CurFontKey = savedFontKey
 End Function
 
 Private Sub FlushCurrentPage()

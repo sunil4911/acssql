@@ -307,44 +307,33 @@ DataReport18.Show (1)
 End Sub
 
 Private Sub Command8_Click()
-Dim PDF As New clsPDF
-PDF.CreatePDF "C:\temp\Invoice.pdf"
-PDF.SetMargins 1, 1, 1, 1
+    Dim PDF As New clsPDF
 
-PDF.SetFont "Times", 16, True
-PDF.PrintText "Invoice", pdfCenter
+    PDF.CreatePDF "C:\temp\Invoice.pdf"
+    PDF.SetLetterhead "C:\ACSSQL\DOC\LH_Content.txt"          ' sidebar + divider (static graphic)
+    PDF.SetLetterheadFooter LetterheadFooterText()            ' bottom disclosure (variable text)
+    PDF.SetMargins 1, 1, 1, 1
 
-PDF.SetFont "Helvetica", 12
-PDF.PrintText ""
-PDF.PrintText "Dear John, please review the *itemized* charges below.", pdfJustify
-PDF.PrintText ""
+    PDF.SetFont "Times", 16, True
+    PDF.PrintText "Invoice", pdfCenter
 
-PDF.SetTabStops 0, 3, 4.5
-PDF.SetFont "Helvetica", 11, True
-PDF.PrintTabbedLine "Item" & vbTab & "Qty" & vbTab & "Price", Array(pdfLeft, pdfRight, pdfRight)
-PDF.SetFont "Helvetica", 11, False
-PDF.PrintTabbedLine "Widget" & vbTab & "3" & vbTab & "**$29.97**", Array(pdfLeft, pdfRight, pdfRight)
-PDF.PrintTabbedLine "Gadget" & vbTab & "1" & vbTab & "**$14.99**", Array(pdfLeft, pdfRight, pdfRight)
+    PDF.SetFont "Helvetica", 12
+    PDF.PrintText ""
+    PDF.PrintText "Dear John, please review the *itemized* charges below.", pdfJustify
+    PDF.PrintText ""
 
-PDF.PrintText ""
-PDF.PrintText "Please remit payment within __10 days__ of this notice.", pdfJustify
+    PDF.SetTabStops 0, 3, 4.5
+    PDF.SetFont "Helvetica", 11, True
+    PDF.PrintTabbedLine "Item" & vbTab & "Qty" & vbTab & "Price", Array(pdfLeft, pdfRight, pdfRight)
+    PDF.SetFont "Helvetica", 11, False
+    PDF.PrintTabbedLine "Widget" & vbTab & "3" & vbTab & "**$29.97**", Array(pdfLeft, pdfRight, pdfRight)
+    PDF.PrintTabbedLine "Gadget" & vbTab & "1" & vbTab & "**$14.99**", Array(pdfLeft, pdfRight, pdfRight)
 
-PDF.SavePDF
+    PDF.PrintText ""
+    PDF.PrintText "Please remit payment within __10 days__ of this notice.", pdfJustify
 
-
- 
-    'Dim PDF As New clsPDF
-    
- 'PDF.CreatePDF "C:\TEMP\TEST.PDF"
- 'PDF.SetMarginsPt 36, 36, 36, 36
- 'PDF.SetFont "F1", 12
- 
- 'PDF.PrintParagraph _
-'"This is a very long paragraph used to test the page margins. The purpose is to verify that the text wraps correctly between the left and right margins. This paragraph contains enough words so that several lines are created and we can see whether the right edge is staying at the correct half inch margin. The document generator should handle letters, agreements, and legal pleadings correctly."
-
-'PDF.SavePDF
+    PDF.SavePDF
     MsgBox "DONE"
-    
 
 End Sub
 
