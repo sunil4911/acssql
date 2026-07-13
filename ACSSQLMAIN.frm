@@ -319,6 +319,7 @@ Private Sub Command8_Click()
 
     PDF.SetFont "Helvetica", 12
     PDF.PrintText ""
+    PDF.PrintText String$(5, " ") & "THIS IS A TEST WITH FIVE LEADING SPACES.", pdfJustify
     PDF.PrintText "Dear John, please review the *itemized* charges below.", pdfJustify
     PDF.PrintText ""
 
