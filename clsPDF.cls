@@ -199,6 +199,12 @@ Public Sub CreatePDF(ByVal sFilePath As String)
     m_Started = True
 End Sub
 
+' Returns the path last written by SavePDF (may differ from CreatePDF if the
+' target file was locked open in a viewer and the PDF was saved to a .tmp file).
+Public Property Get FilePath() As String
+    FilePath = m_FilePath
+End Property
+
 Public Sub SetMargins(ByVal LeftIn As Double, ByVal TopIn As Double, ByVal RightIn As Double, ByVal BottomIn As Double)
     m_MarginLeft = LeftIn * 72
     m_MarginTop = TopIn * 72
@@ -289,6 +295,44 @@ Public Sub PrintTextAtPt(ByVal XPt As Double, ByVal YPt As Double, ByVal Text As
             lineNum = lineNum + PrintTextAtSegment(lineArr(segIdx), XPt, YPt, Align, WidthPt, lineNum, lineH)
         End If
     Next segIdx
+End Sub
+
+' Centers (or aligns) text within the full physical page width at the current
+' vertical cursor — used for the FDCPA footer under the letterhead sidebar.
+Public Sub PrintTextCenteredOnFullPage(ByVal Text As String, Optional ByVal Align As PdfAlign = pdfCenter)
+    Dim yIn As Double
+    Dim lineArr() As String
+    Dim segIdx As Integer
+    Dim lineNum As Integer
+    Dim lineH As Double
+    Dim rowsUsed As Integer
+    Dim nRows As Integer
+
+    If Not m_Started Then
+        Err.Raise 5, "clsPDF.PrintTextCenteredOnFullPage", "CreatePDF must be called first."
+    End If
+    If Len(Text) = 0 Then Exit Sub
+
+    If (m_CurY - LineHeight()) < m_MarginBottom Then NewPage
+
+    yIn = (m_PageHeight - m_CurY) / 72
+    lineH = LineHeight()
+    lineArr = Split(NormalizeNewlines(Text), Chr(10))
+    lineNum = 0
+    rowsUsed = 0
+
+    For segIdx = 0 To UBound(lineArr)
+        If Len(lineArr(segIdx)) = 0 Then
+            lineNum = lineNum + 1
+            rowsUsed = rowsUsed + 1
+        Else
+            nRows = PrintTextAtSegment(lineArr(segIdx), 0, yIn * 72, Align, m_PageWidth, lineNum, lineH)
+            lineNum = lineNum + nRows
+            rowsUsed = rowsUsed + nRows
+        End If
+    Next segIdx
+
+    m_CurY = m_CurY - rowsUsed * lineH
 End Sub
 
 ' Draws a straight line at an exact page position, independent of the normal
@@ -531,10 +575,15 @@ Public Sub SavePDF()
     Dim letterheadObjNum As Integer
     Dim lhStream As String
     Dim contentsEntry As String
+    Dim tempPath As String
+    Dim targetPath As String
 
     If Not m_Started Then
         Err.Raise 5, "clsPDF.SavePDF", "CreatePDF must be called before SavePDF."
     End If
+
+    targetPath = m_FilePath
+    tempPath = BuildTempPdfPath(targetPath)
 
     FlushCurrentPage
     nPages = m_PageCount
@@ -556,11 +605,13 @@ Public Sub SavePDF()
     ReDim offsets(1 To totalObjs)
 
     On Error Resume Next
-    If Len(Dir$(m_FilePath)) > 0 Then Kill m_FilePath
+    If Len(Dir$(tempPath)) > 0 Then Kill tempPath
     On Error GoTo 0
 
     fnum = FreeFile
-    Open m_FilePath For Binary Access Write As #fnum
+    On Error GoTo SavePdfWriteFailed
+    Open tempPath For Binary Access Write As #fnum
+    On Error GoTo 0
     Pos = 1
 
     WriteBytes fnum, Pos, "%PDF-1.4" & vbLf & "%" & Chr$(226) & Chr$(227) & Chr$(207) & Chr$(211) & vbLf
@@ -631,8 +682,60 @@ Public Sub SavePDF()
     WriteBytes fnum, Pos, "trailer" & vbLf & "<< /Size " & (totalObjs + 1) & " /Root 1 0 R >>" & vbLf & "startxref" & vbLf & xrefStart & vbLf & "%%EOF"
 
     Close #fnum
+
+    If CommitPdfFile(tempPath, targetPath) Then
+        m_FilePath = targetPath
+    Else
+        m_FilePath = tempPath
+    End If
     m_Started = False
+    Exit Sub
+
+SavePdfWriteFailed:
+    Dim writeErr As Long
+    Dim writeMsg As String
+    writeErr = Err.Number
+    writeMsg = Err.Description
+    On Error Resume Next
+    Close #fnum
+    On Error GoTo 0
+    Err.Raise 75, "clsPDF.SavePDF", "Cannot write PDF file (" & tempPath & "). " & writeMsg & " (" & writeErr & ")"
 End Sub
+
+Private Function BuildTempPdfPath(ByVal targetPath As String) As String
+    Dim dotPos As Long
+
+    dotPos = InStrRev(targetPath, ".")
+    If dotPos > InStrRev(targetPath, "\") Then
+        BuildTempPdfPath = Left$(targetPath, dotPos - 1) & ".tmp"
+    Else
+        BuildTempPdfPath = targetPath & ".tmp"
+    End If
+End Function
+
+' Write to a .tmp file first, then replace the target. Returns False when the
+' target is locked (usually because a PDF viewer still has it open).
+Private Function CommitPdfFile(ByVal tempPath As String, ByVal targetPath As String) As Boolean
+    On Error GoTo CommitFailed
+
+    If StrComp(tempPath, targetPath, vbTextCompare) = 0 Then
+        CommitPdfFile = True
+        Exit Function
+    End If
+
+    If Len(Dir$(targetPath)) > 0 Then
+        On Error Resume Next
+        SetAttr targetPath, vbNormal
+        On Error GoTo CommitFailed
+        Kill targetPath
+    End If
+    Name tempPath As targetPath
+    CommitPdfFile = True
+    Exit Function
+
+CommitFailed:
+    CommitPdfFile = False
+End Function
 
 '--------------------------------------------------------------------------
 ' Internal: line layout (word-wrap, alignment, justification)
@@ -665,17 +768,6 @@ Private Function MeasureTokenSliceWidth(ByRef tokens() As PdfToken, ByVal startI
         End If
     Next I
     MeasureTokenSliceWidth = totalW
-End Function
-
-Private Function CountInterWordGapsSlice(ByRef tokens() As PdfToken, ByVal startIdx As Integer, ByVal endIdx As Integer) As Integer
-    Dim I As Integer
-    Dim nGaps As Integer
-
-    nGaps = 0
-    For I = startIdx To endIdx - 1
-        If NeedsInterWordSpace(tokens, I) Then nGaps = nGaps + 1
-    Next I
-    CountInterWordGapsSlice = nGaps
 End Function
 
 Private Sub EmitLine(ByRef tokens() As PdfToken, ByVal nCount As Integer, ByVal xStart0 As Double, ByVal availWidth As Double, ByVal Align As PdfAlign, ByVal isLast As Boolean)
@@ -711,11 +803,11 @@ Private Sub EmitLine(ByRef tokens() As PdfToken, ByVal nCount As Integer, ByVal 
             xStart = xStart0 + (availWidth - naturalWidth)
         Case pdfJustify
             xStart = xStart0
-            If nCount - bodyStart > 1 Then
-                nGaps = CountInterWordGapsSlice(tokens, bodyStart, nCount - 1)
+            If nCount - bodyStart > 0 Then
+                nGaps = CountWordToWordGapsSlice(tokens, bodyStart, nCount - 1)
                 bodyNatural = MeasureTokenSliceWidth(tokens, bodyStart, nCount - 1, tokW)
                 bodyAvail = availWidth - indentW
-                justifyBody = (Not isLast) Or (nLead > 0)
+                justifyBody = (Not isLast)
                 If justifyBody And nGaps > 0 Then tw = (bodyAvail - bodyNatural) / nGaps
             End If
         Case Else ' pdfLeft
@@ -730,32 +822,20 @@ Private Sub EmitLine(ByRef tokens() As PdfToken, ByVal nCount As Integer, ByVal 
         For I = 0 To nLead - 1
             tokX(I) = pen
             pen = pen + tokW(I)
-            If I < nLead - 1 Then
-                If NeedsInterWordSpace(tokens, I) Then pen = pen + spaceW
-            End If
+            AdvancePenAfterToken pen, tokens, I, nCount, pdfLeft, 0, spaceW
         Next I
         pen = xStart0 + indentW
         For I = bodyStart To nCount - 1
             tokX(I) = pen
             pen = pen + tokW(I)
-            If I < nCount - 1 Then
-                If NeedsInterWordSpace(tokens, I) Then pen = pen + spaceW + tw
-            End If
+            AdvancePenAfterToken pen, tokens, I, nCount, pdfJustify, tw, spaceW
         Next I
     Else
         pen = xStart
         For I = 0 To nCount - 1
             tokX(I) = pen
             pen = pen + tokW(I)
-            If I < nCount - 1 Then
-                If NeedsInterWordSpace(tokens, I) Then
-                    If Align = pdfJustify Then
-                        pen = pen + spaceW + tw
-                    Else
-                        pen = pen + spaceW
-                    End If
-                End If
-            End If
+            AdvancePenAfterToken pen, tokens, I, nCount, Align, tw, spaceW
         Next I
     End If
 
@@ -828,8 +908,8 @@ Private Sub EmitLineAt(ByRef tokens() As PdfToken, ByVal nCount As Integer, ByVa
             xStart = xStart0 + (availWidth - naturalWidth)
         Case pdfJustify
             xStart = xStart0
-            If nCount - bodyStart > 1 Then
-                nGaps = CountInterWordGapsSlice(tokens, bodyStart, nCount - 1)
+            If nCount - bodyStart > 0 Then
+                nGaps = CountWordToWordGapsSlice(tokens, bodyStart, nCount - 1)
                 bodyNatural = MeasureTokenSliceWidth(tokens, bodyStart, nCount - 1, tokW)
                 bodyAvail = availWidth - indentW
                 If nGaps > 0 Then tw = (bodyAvail - bodyNatural) / nGaps
@@ -844,32 +924,20 @@ Private Sub EmitLineAt(ByRef tokens() As PdfToken, ByVal nCount As Integer, ByVa
         For I = 0 To nLead - 1
             tokX(I) = pen
             pen = pen + tokW(I)
-            If I < nLead - 1 Then
-                If NeedsInterWordSpace(tokens, I) Then pen = pen + spaceW
-            End If
+            AdvancePenAfterToken pen, tokens, I, nCount, pdfLeft, 0, spaceW
         Next I
         pen = xStart0 + indentW
         For I = bodyStart To nCount - 1
             tokX(I) = pen
             pen = pen + tokW(I)
-            If I < nCount - 1 Then
-                If NeedsInterWordSpace(tokens, I) Then pen = pen + spaceW + tw
-            End If
+            AdvancePenAfterToken pen, tokens, I, nCount, pdfJustify, tw, spaceW
         Next I
     Else
         pen = xStart
         For I = 0 To nCount - 1
             tokX(I) = pen
             pen = pen + tokW(I)
-            If I < nCount - 1 Then
-                If NeedsInterWordSpace(tokens, I) Then
-                    If effAlign = pdfJustify Then
-                        pen = pen + spaceW + tw
-                    Else
-                        pen = pen + spaceW
-                    End If
-                End If
-            End If
+            AdvancePenAfterToken pen, tokens, I, nCount, effAlign, tw, spaceW
         Next I
     End If
 
@@ -986,7 +1054,10 @@ Private Sub PrintTextSegment(ByVal Text As String, ByVal Align As PdfAlign, ByVa
     Dim I As Integer
     Dim wordW As Double, spaceW As Double, curWidth As Double, testWidth As Double
     Dim curXStart As Double, curAvailWidth As Double
+    Dim paraXStart As Double, paraAvailWidth As Double
 
+    paraXStart = segXStart
+    paraAvailWidth = segAvailWidth
     curXStart = segXStart
     curAvailWidth = segAvailWidth
 
@@ -999,33 +1070,52 @@ Private Sub PrintTextSegment(ByVal Text As String, ByVal Align As PdfAlign, ByVa
     lineCount = 0
     curWidth = 0
 
-    For I = 0 To nTok - 1
-        wordW = MeasureWord(tokens(I).sWord, m_FontFamily, tokens(I).bBold) * m_FontSize / 1000
-
-        If lineCount = 0 Then
-            testWidth = wordW
+    I = 0
+    Do While I <= nTok - 1
+        If lineCount = 0 And I > 0 And IsSpaceRun(tokens(I).sWord) Then
+            I = I + 1
         Else
-            If NeedsInterWordSpaceTokens(lineTok(lineCount - 1), tokens(I)) Then
-                testWidth = curWidth + spaceW + wordW
+            wordW = MeasureWord(tokens(I).sWord, m_FontFamily, tokens(I).bBold) * m_FontSize / 1000
+
+            If lineCount = 0 Then
+                testWidth = wordW
             Else
-                testWidth = curWidth + wordW
+                If NeedsInterWordSpaceTokens(lineTok(lineCount - 1), tokens(I)) Then
+                    testWidth = curWidth + spaceW + wordW
+                Else
+                    testWidth = curWidth + wordW
+                End If
+            End If
+
+            If testWidth > curAvailWidth And lineCount > 0 Then
+                lineCount = TrimTrailingSpaceRuns(lineTok, lineCount)
+                If lineCount > 0 Then
+                    EmitLine lineTok, lineCount, curXStart, curAvailWidth, Align, False
+                End If
+                ' SetStartX applies to the first line only; wrapped lines use the
+                ' normal left margin so the paragraph body spans the full width.
+                curXStart = normalXStart
+                curAvailWidth = normalAvailWidth
+                lineCount = 0
+                curWidth = 0
+                If IsSpaceRun(tokens(I).sWord) Then
+                    I = I + 1
+                Else
+                    lineTok(lineCount) = tokens(I)
+                    lineCount = 1
+                    curWidth = wordW
+                    I = I + 1
+                End If
+            Else
+                curWidth = testWidth
+                lineTok(lineCount) = tokens(I)
+                lineCount = lineCount + 1
+                I = I + 1
             End If
         End If
+    Loop
 
-        If testWidth > curAvailWidth And lineCount > 0 Then
-            EmitLine lineTok, lineCount, curXStart, curAvailWidth, Align, False
-            curXStart = normalXStart
-            curAvailWidth = normalAvailWidth
-            lineCount = 0
-            curWidth = wordW
-        Else
-            curWidth = testWidth
-        End If
-
-        lineTok(lineCount) = tokens(I)
-        lineCount = lineCount + 1
-    Next I
-
+    lineCount = TrimTrailingSpaceRuns(lineTok, lineCount)
     If lineCount > 0 Then EmitLine lineTok, lineCount, curXStart, curAvailWidth, Align, True
 End Sub
 
@@ -1057,37 +1147,57 @@ Private Function PrintTextAtSegment(ByVal Text As String, ByVal XPt As Double, B
     curWidth = 0
     rowsUsed = 0
 
-    For I = 0 To nTok - 1
-        wordW = MeasureWord(tokens(I).sWord, m_FontFamily, tokens(I).bBold) * m_FontSize / 1000
-
-        If lineCount = 0 Then
-            testWidth = wordW
+    I = 0
+    Do While I <= nTok - 1
+        If lineCount = 0 And I > 0 And IsSpaceRun(tokens(I).sWord) Then
+            I = I + 1
         Else
-            If NeedsInterWordSpaceTokens(lineTok(lineCount - 1), tokens(I)) Then
-                testWidth = curWidth + spaceW + wordW
-            Else
-                testWidth = curWidth + wordW
-            End If
-        End If
+            wordW = MeasureWord(tokens(I).sWord, m_FontFamily, tokens(I).bBold) * m_FontSize / 1000
 
-        If segW > 0 Then
-            If testWidth > segW And lineCount > 0 Then
-                yDev = m_PageHeight - (YPt + (lineNum + rowsUsed) * lineH)
-                EmitLineAt lineTok, lineCount, segX, yDev, Align, segW
-                rowsUsed = rowsUsed + 1
-                lineCount = 0
-                curWidth = wordW
+            If lineCount = 0 Then
+                testWidth = wordW
+            Else
+                If NeedsInterWordSpaceTokens(lineTok(lineCount - 1), tokens(I)) Then
+                    testWidth = curWidth + spaceW + wordW
+                Else
+                    testWidth = curWidth + wordW
+                End If
+            End If
+
+            If segW > 0 Then
+                If testWidth > segW And lineCount > 0 Then
+                    lineCount = TrimTrailingSpaceRuns(lineTok, lineCount)
+                    If lineCount > 0 Then
+                        yDev = m_PageHeight - (YPt + (lineNum + rowsUsed) * lineH)
+                        EmitLineAt lineTok, lineCount, segX, yDev, Align, segW
+                        rowsUsed = rowsUsed + 1
+                    End If
+                    lineCount = 0
+                    curWidth = 0
+                    If IsSpaceRun(tokens(I).sWord) Then
+                        I = I + 1
+                    Else
+                        lineTok(lineCount) = tokens(I)
+                        lineCount = 1
+                        curWidth = wordW
+                        I = I + 1
+                    End If
+                Else
+                    curWidth = testWidth
+                    lineTok(lineCount) = tokens(I)
+                    lineCount = lineCount + 1
+                    I = I + 1
+                End If
             Else
                 curWidth = testWidth
+                lineTok(lineCount) = tokens(I)
+                lineCount = lineCount + 1
+                I = I + 1
             End If
-        Else
-            curWidth = testWidth
         End If
+    Loop
 
-        lineTok(lineCount) = tokens(I)
-        lineCount = lineCount + 1
-    Next I
-
+    lineCount = TrimTrailingSpaceRuns(lineTok, lineCount)
     If lineCount > 0 Then
         yDev = m_PageHeight - (YPt + (lineNum + rowsUsed) * lineH)
         EmitLineAt lineTok, lineCount, segX, yDev, Align, segW
@@ -1095,6 +1205,13 @@ Private Function PrintTextAtSegment(ByVal Text As String, ByVal XPt As Double, B
     End If
 
     PrintTextAtSegment = rowsUsed
+End Function
+
+Private Function TrimTrailingSpaceRuns(ByRef tokens() As PdfToken, ByVal nCount As Integer) As Integer
+    Do While nCount > 0 And IsSpaceRun(tokens(nCount - 1).sWord)
+        nCount = nCount - 1
+    Loop
+    TrimTrailingSpaceRuns = nCount
 End Function
 
 Private Function IsSpaceRun(ByVal sWord As String) As Boolean
@@ -1118,16 +1235,52 @@ Private Function NeedsInterWordSpace(ByRef tokens() As PdfToken, ByVal idx As In
     NeedsInterWordSpace = Not (IsSpaceRun(tokens(idx).sWord) Or IsSpaceRun(tokens(idx + 1).sWord))
 End Function
 
-Private Function CountInterWordGaps(ByRef tokens() As PdfToken, ByVal nCount As Integer) As Integer
+' A space-run token that sits between two word tokens (the usual inter-word gap).
+Private Function IsInterWordSpaceToken(ByRef tokens() As PdfToken, ByVal nCount As Integer, ByVal idx As Integer) As Boolean
+    If Not IsSpaceRun(tokens(idx).sWord) Then
+        IsInterWordSpaceToken = False
+        Exit Function
+    End If
+    If idx <= 0 Or idx >= nCount - 1 Then
+        IsInterWordSpaceToken = False
+        Exit Function
+    End If
+    IsInterWordSpaceToken = (Not IsSpaceRun(tokens(idx - 1).sWord)) And (Not IsSpaceRun(tokens(idx + 1).sWord))
+End Function
+
+' Count word-to-word boundaries, skipping any space-run tokens between words.
+Private Function CountWordToWordGapsSlice(ByRef tokens() As PdfToken, ByVal startIdx As Integer, ByVal endIdx As Integer) As Integer
     Dim I As Integer
+    Dim J As Integer
     Dim nGaps As Integer
 
     nGaps = 0
-    For I = 0 To nCount - 2
-        If NeedsInterWordSpace(tokens, I) Then nGaps = nGaps + 1
+    For I = startIdx To endIdx
+        If Not IsSpaceRun(tokens(I).sWord) Then
+            For J = I + 1 To endIdx
+                If Not IsSpaceRun(tokens(J).sWord) Then
+                    nGaps = nGaps + 1
+                    Exit For
+                End If
+            Next J
+        End If
     Next I
-    CountInterWordGaps = nGaps
+    CountWordToWordGapsSlice = nGaps
 End Function
+
+Private Sub AdvancePenAfterToken(ByRef pen As Double, ByRef tokens() As PdfToken, ByVal idx As Integer, ByVal nCount As Integer, ByVal Align As PdfAlign, ByVal tw As Double, ByVal spaceW As Double)
+    If idx >= nCount - 1 Then Exit Sub
+
+    If Align = pdfJustify And tw <> 0 Then
+        If IsInterWordSpaceToken(tokens, nCount, idx) Then
+            pen = pen + tw
+        ElseIf NeedsInterWordSpace(tokens, idx) Then
+            pen = pen + spaceW + tw
+        End If
+    ElseIf NeedsInterWordSpace(tokens, idx) Then
+        pen = pen + spaceW
+    End If
+End Sub
 
 Private Function MeasureTokenRowWidth(ByRef tokens() As PdfToken, ByVal nCount As Integer, ByRef tokW() As Double) As Double
     Dim I As Integer
@@ -1429,8 +1582,8 @@ Private Function BuildLetterheadFooterContent() As String
     m_FontUnderline = False
     m_CurFontKey = ""
 
-    xStart = m_MarginLeft
-    availWidth = m_PageWidth - m_MarginLeft - m_MarginRight
+    xStart = 0
+    availWidth = m_PageWidth
     lineH = LineHeight()
 
     TokenizeLine m_LetterheadFooterText, tokens, nTok

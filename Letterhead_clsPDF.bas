@@ -225,7 +225,7 @@ End Function
 
 Public Sub PrintFDCPADisclosure(ByRef PDF As clsPDF, Optional ByVal FirmName As String = FIRM_NAME)
     PDF.SetFont "Times", 12, True
-    PDF.PrintParagraph LetterheadFooterText(FirmName), pdfCenter
+    PDF.PrintTextCenteredOnFullPage LetterheadFooterText(FirmName), pdfCenter
     PDF.SetFont "Times", 12, False
 End Sub
 
@@ -338,3 +338,69 @@ Public Sub Demo_PrintLetterhead()
 
     MsgBox "Saved C:\temp\SampleLetter.pdf"
 End Sub
+
+' Opens a PDF for viewing without Adobe "creating file to read" / save-on-close
+' prompts. Uses Microsoft Edge or Acrobat Reader only — never the Windows default
+' handler (Adobe Acrobat Pro), which prompts to save on close.
+Public Sub OpenPdfForViewing(ByVal pdfPath As String)
+    Dim edgePath As String
+    Dim readerPath As String
+    Dim wsh As Object
+
+    pdfPath = Trim$(pdfPath)
+    If Len(pdfPath) = 0 Then Exit Sub
+    If Len(Dir$(pdfPath)) = 0 Then Exit Sub
+
+    Set wsh = CreateObject("WScript.Shell")
+
+    edgePath = ResolveEdgeExe()
+    If Len(edgePath) > 0 Then
+        wsh.Run """" & edgePath & """ --new-window --no-first-run """ & pdfPath & """", 1, False
+        Exit Sub
+    End If
+
+    readerPath = FindAcrobatReaderExe()
+    If Len(readerPath) > 0 Then
+        wsh.Run """" & readerPath & """ /s /n """ & pdfPath & """", 1, False
+        Exit Sub
+    End If
+
+    MsgBox "PDF saved (not opened automatically):" & vbCrLf & pdfPath & vbCrLf & vbCrLf & _
+        "Edge or Adobe Reader was not found. Open the file manually if needed.", vbInformation, "PDF"
+End Sub
+
+Private Function ResolveEdgeExe() As String
+    Dim p As String
+
+    p = Environ("ProgramFiles(x86)") & "\Microsoft\Edge\Application\msedge.exe"
+    If Len(Dir$(p)) > 0 Then
+        ResolveEdgeExe = p
+        Exit Function
+    End If
+
+    p = Environ("ProgramFiles") & "\Microsoft\Edge\Application\msedge.exe"
+    If Len(Dir$(p)) > 0 Then
+        ResolveEdgeExe = p
+        Exit Function
+    End If
+
+    p = Environ("LOCALAPPDATA") & "\Microsoft\Edge\Application\msedge.exe"
+    If Len(Dir$(p)) > 0 Then ResolveEdgeExe = p
+End Function
+
+Private Function FindAcrobatReaderExe() As String
+    Dim candidates(0 To 3) As String
+    Dim I As Integer
+
+    candidates(0) = Environ("ProgramFiles(x86)") & "\Adobe\Acrobat Reader DC\Reader\AcroRd32.exe"
+    candidates(1) = Environ("ProgramFiles") & "\Adobe\Acrobat Reader DC\Reader\AcroRd32.exe"
+    candidates(2) = Environ("ProgramFiles(x86)") & "\Adobe\Acrobat Reader DC\Reader\AcroRd32.exe"
+    candidates(3) = Environ("ProgramFiles") & "\Adobe\Acrobat Reader\AcroRd32.exe"
+
+    For I = 0 To 3
+        If Len(Dir$(candidates(I))) > 0 Then
+            FindAcrobatReaderExe = candidates(I)
+            Exit Function
+        End If
+    Next I
+End Function

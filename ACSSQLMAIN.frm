@@ -232,8 +232,6 @@ Attribute VB_Creatable = False
 Attribute VB_PredeclaredId = True
 Attribute VB_Exposed = False
 
-Private Declare Function ShellExecute Lib "shell32.dll" Alias "ShellExecuteA" (ByVal hwnd As Long, ByVal lpOperation As String, ByVal lpFile As String, ByVal lpParameters As String, ByVal lpDirectory As String, ByVal nShowCmd As Long) As Long
-
 Private Sub Command1_Click()
 Form2.Show
 End Sub
@@ -387,7 +385,7 @@ Private Sub Command10_Click()
         AmountDue:="$9,778.40", _
         CoDefendantName:=CoDefendantV
 
-    ShellExecute 0, "OPEN", OutPath, "", "", 1
+    OpenPdfForViewing OutPath
 End Sub
 
 Private Sub Command9_Click()
