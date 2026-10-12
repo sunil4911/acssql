@@ -542,6 +542,20 @@ Public Sub PrintTabbedLine(ByVal Text As String, Optional ByVal Align As Variant
     m_CurY = m_CurY - LineHeight()
 End Sub
 
+' Forces a page break now if LinesNeeded worth of lines would NOT all fit
+' before the bottom margin on the current page - lets a caller keep a
+' multi-line unit (e.g. a signature block + a checkbox box that must stay
+' together) from being split across a page boundary, instead of relying on
+' PrintText/PrintTabbedLine's own per-LINE overflow check (which only looks
+' one line ahead, so a tall block can still start on a page it won't fully
+' fit on and get broken up mid-block).
+Public Sub EnsureSpaceForLines(ByVal LinesNeeded As Integer)
+    If Not m_Started Then
+        Err.Raise 5, "clsPDF.EnsureSpaceForLines", "CreatePDF must be called before EnsureSpaceForLines."
+    End If
+    If (m_CurY - LinesNeeded * LineHeight()) < m_MarginBottom Then NewPage
+End Sub
+
 ' Resolves the PdfAlign to use for column index ColIdx (0-based) from the
 ' Align argument passed to PrintTabbedLine, which may be a single PdfAlign
 ' (used for every column) or an array of PdfAlign values (one per column;
@@ -1306,6 +1320,8 @@ Private Sub TokenizeLine(ByVal sText As String, ByRef tokens() As PdfToken, ByRe
     Dim bWordBold As Boolean, bWordItalic As Boolean, bWordUnderline As Boolean
     Dim sCurWord As String
     Dim sChar As String
+    Dim bPrecededByUnderscore As Boolean
+    Dim bIsolatedUnderscorePair As Boolean
 
     nCount = 0
     ReDim tokens(0 To 0)
@@ -1322,44 +1338,58 @@ Private Sub TokenizeLine(ByVal sText As String, ByRef tokens() As PdfToken, ByRe
         If mid$(sText, I, 2) = "**" Then
             bBold = Not bBold
             I = I + 2
-        ElseIf mid$(sText, I, 2) = "__" Then
-            bUnderline = Not bUnderline
-            I = I + 2
-        ElseIf mid$(sText, I, 1) = "*" Then
-            bItalic = Not bItalic
-            I = I + 1
         Else
-            sChar = mid$(sText, I, 1)
-            If sChar = " " Then
-                If Len(sCurWord) > 0 Then
-                    If IsSpaceRun(sCurWord) Then
-                        sCurWord = sCurWord & " "
+            ' A genuine "__underline__" marker is always an ISOLATED pair of
+            ' underscores (not adjacent to a 3rd one on either side). A run
+            ' of 3+ underscores in a row - e.g. a signature/blank line like
+            ' "X_______________" or a checkbox placeholder like "___Yes" -
+            ' is literal text, not markup, and falls through to the plain-
+            ' character branch below, one underscore at a time.
+            bPrecededByUnderscore = False
+            If I > 1 Then
+                If mid$(sText, I - 1, 1) = "_" Then bPrecededByUnderscore = True
+            End If
+            bIsolatedUnderscorePair = (mid$(sText, I, 2) = "__") And (mid$(sText, I, 3) <> "___") And Not bPrecededByUnderscore
+
+            If bIsolatedUnderscorePair Then
+                bUnderline = Not bUnderline
+                I = I + 2
+            ElseIf mid$(sText, I, 1) = "*" Then
+                bItalic = Not bItalic
+                I = I + 1
+            Else
+                sChar = mid$(sText, I, 1)
+                If sChar = " " Then
+                    If Len(sCurWord) > 0 Then
+                        If IsSpaceRun(sCurWord) Then
+                            sCurWord = sCurWord & " "
+                        Else
+                            AddToken tokens, nCount, sCurWord, bWordBold, bWordItalic, bWordUnderline
+                            sCurWord = " "
+                            bWordBold = bBold
+                            bWordItalic = bItalic
+                            bWordUnderline = bUnderline
+                        End If
                     Else
-                        AddToken tokens, nCount, sCurWord, bWordBold, bWordItalic, bWordUnderline
                         sCurWord = " "
                         bWordBold = bBold
                         bWordItalic = bItalic
                         bWordUnderline = bUnderline
                     End If
                 Else
-                    sCurWord = " "
-                    bWordBold = bBold
-                    bWordItalic = bItalic
-                    bWordUnderline = bUnderline
+                    If Len(sCurWord) > 0 And IsSpaceRun(sCurWord) Then
+                        AddToken tokens, nCount, sCurWord, bWordBold, bWordItalic, bWordUnderline
+                        sCurWord = ""
+                    End If
+                    If Len(sCurWord) = 0 Then
+                        bWordBold = bBold
+                        bWordItalic = bItalic
+                        bWordUnderline = bUnderline
+                    End If
+                    sCurWord = sCurWord & sChar
                 End If
-            Else
-                If Len(sCurWord) > 0 And IsSpaceRun(sCurWord) Then
-                    AddToken tokens, nCount, sCurWord, bWordBold, bWordItalic, bWordUnderline
-                    sCurWord = ""
-                End If
-                If Len(sCurWord) = 0 Then
-                    bWordBold = bBold
-                    bWordItalic = bItalic
-                    bWordUnderline = bUnderline
-                End If
-                sCurWord = sCurWord & sChar
+                I = I + 1
             End If
-            I = I + 1
         End If
     Loop
     If Len(sCurWord) > 0 Then AddToken tokens, nCount, sCurWord, bWordBold, bWordItalic, bWordUnderline

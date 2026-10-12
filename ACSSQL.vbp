@@ -49,6 +49,7 @@ Form=CAUSE_DETAIL.frm
 Module=Module1; ACSSQL.bas
 Module=LET10_InfoSubpoena_clsPDF; LET10_InfoSubpoena_clsPDF.bas
 Module=Letterhead_clsPDF; Letterhead_clsPDF.bas
+Module=StandardLetter_clsPDF; StandardLetter_clsPDF.bas
 Form=SEARCH_BY_CASE.frm
 Designer=DataReport2.Dsr
 Form=PLEADINGS_PJ.frm

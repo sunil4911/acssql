@@ -336,7 +336,7 @@ Public Sub Demo_PrintLetterhead()
         SignerTitle:="Attorney", _
         Enclosures:=True
 
-    MsgBox "Saved C:\temp\SampleLetter.pdf"
+    OpenPdfForViewing "C:\temp\SampleLetter.pdf"
 End Sub
 
 ' Opens a PDF for viewing without Adobe "creating file to read" / save-on-close
@@ -349,43 +349,67 @@ Public Sub OpenPdfForViewing(ByVal pdfPath As String)
 
     pdfPath = Trim$(pdfPath)
     If Len(pdfPath) = 0 Then Exit Sub
-    If Len(Dir$(pdfPath)) = 0 Then Exit Sub
 
+    ' Dir$ raises runtime error 52 when a folder in the path does not exist
+    ' (instead of returning an empty string), so this check must be guarded.
+    If Not PdfFileExists(pdfPath) Then
+        MsgBox "The PDF file could not be found:" & vbCrLf & pdfPath, vbExclamation, "PDF"
+        Exit Sub
+    End If
+
+    On Error Resume Next
     Set wsh = CreateObject("WScript.Shell")
+    If Err.Number <> 0 Then
+        Err.Clear
+        ShellExecute 0, "open", pdfPath, "", "", 1
+        Exit Sub
+    End If
 
     edgePath = ResolveEdgeExe()
     If Len(edgePath) > 0 Then
+        Err.Clear
         wsh.Run """" & edgePath & """ --new-window --no-first-run """ & pdfPath & """", 1, False
-        Exit Sub
+        If Err.Number = 0 Then Exit Sub
+        Err.Clear
     End If
 
     readerPath = FindAcrobatReaderExe()
     If Len(readerPath) > 0 Then
+        Err.Clear
         wsh.Run """" & readerPath & """ /s /n """ & pdfPath & """", 1, False
-        Exit Sub
+        If Err.Number = 0 Then Exit Sub
+        Err.Clear
     End If
 
-    MsgBox "PDF saved (not opened automatically):" & vbCrLf & pdfPath & vbCrLf & vbCrLf & _
-        "Edge or Adobe Reader was not found. Open the file manually if needed.", vbInformation, "PDF"
+    Err.Clear
+    ShellExecute 0, "open", pdfPath, "", "", 1
 End Sub
+
+' True when path exists as a file. Dir$ is wrapped because a missing parent
+' folder raises error 52 instead of returning "".
+Public Function PdfFileExists(ByVal p As String) As Boolean
+    On Error Resume Next
+    PdfFileExists = (Len(Dir$(p)) > 0)
+    If Err.Number <> 0 Then PdfFileExists = False
+End Function
 
 Private Function ResolveEdgeExe() As String
     Dim p As String
 
     p = Environ("ProgramFiles(x86)") & "\Microsoft\Edge\Application\msedge.exe"
-    If Len(Dir$(p)) > 0 Then
+    If PdfFileExists(p) Then
         ResolveEdgeExe = p
         Exit Function
     End If
 
     p = Environ("ProgramFiles") & "\Microsoft\Edge\Application\msedge.exe"
-    If Len(Dir$(p)) > 0 Then
+    If PdfFileExists(p) Then
         ResolveEdgeExe = p
         Exit Function
     End If
 
     p = Environ("LOCALAPPDATA") & "\Microsoft\Edge\Application\msedge.exe"
-    If Len(Dir$(p)) > 0 Then ResolveEdgeExe = p
+    If PdfFileExists(p) Then ResolveEdgeExe = p
 End Function
 
 Private Function FindAcrobatReaderExe() As String
@@ -398,7 +422,7 @@ Private Function FindAcrobatReaderExe() As String
     candidates(3) = Environ("ProgramFiles") & "\Adobe\Acrobat Reader\AcroRd32.exe"
 
     For I = 0 To 3
-        If Len(Dir$(candidates(I))) > 0 Then
+        If PdfFileExists(candidates(I)) Then
             FindAcrobatReaderExe = candidates(I)
             Exit Function
         End If

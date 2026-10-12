@@ -38,6 +38,7 @@ Begin VB.Form Form1
       Left            =   840
       TabIndex        =   8
       Top             =   7680
+      Visible         =   0   'False
       Width           =   735
    End
    Begin VB.CommandButton Command10 
@@ -55,6 +56,7 @@ Begin VB.Form Form1
       Left            =   1050
       TabIndex        =   10
       Top             =   8640
+      Visible         =   0   'False
       Width           =   4425
    End
    Begin VB.CommandButton Command7 
@@ -332,7 +334,7 @@ Private Sub Command8_Click()
     PDF.PrintText "Please remit payment within __10 days__ of this notice.", pdfJustify
 
     PDF.SavePDF
-    MsgBox "DONE"
+    OpenPdfForViewing "C:\temp\Invoice.pdf"
 
 End Sub
 
@@ -363,7 +365,7 @@ Private Sub Command10_Click()
     OutPath = "C:\temp\LET10_Package.pdf"
 
     PrintSubpoenaWithCoverLetter _
-        PdfPath:=OutPath, _
+        pdfPath:=OutPath, _
         RecipientLines:=DefendantV & vbNewLine & "40 Hughes Rd.  Mexico, NY 13114", _
         DateStr:=Format$(Date, "mm/dd/yy"), _
         Salutation:="Dear Sir or Madam:", _
